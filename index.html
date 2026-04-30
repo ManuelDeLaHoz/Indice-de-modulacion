@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador de Modulación AM</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --bg-panel: #f8fafc;
+            --bg-canvas: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --danger: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden; /* Evita el scroll vertical y horizontal */
+            background-color: var(--bg-canvas);
+            color: var(--text-main);
+        }
+
+        #panel {
+            width: 380px;
+            background-color: var(--bg-panel);
+            border-right: 1px solid var(--border);
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+            z-index: 10;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .formula-box {
+            background: white;
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.95rem;
+            text-align: center;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        label {
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        #mu-display {
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .buttons-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.5rem;
+        }
+
+        button {
+            padding: 0.75rem 1rem;
+            background-color: white;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            color: var(--text-main);
+            transition: all 0.2s;
+            text-align: left;
+        }
+
+        button:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background-color: #eff6ff;
+        }
+
+        button.active {
+            background-color: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        #status-card {
+            margin-top: auto;
+            padding: 1rem;
+            border-radius: 8px;
+            background-color: white;
+            border-left: 4px solid var(--primary);
+        }
+
+        #status-title {
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        #status-desc {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background-color: var(--bg-canvas);
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Responsive adjustments just in case */
+        @media (max-width: 768px) {
+            body { flex-direction: column; }
+            #panel { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--border); overflow-y: auto;}
+            #canvas-container { height: 50vh; }
+        }
+    </style>
+</head>
+<body>
+
+    <aside id="panel">
+        <h1>Modulación AM</h1>
+        
+        <div class="formula-box">
+            s(t) = [A + m(t)] · cos(2πf<sub>c</sub>t)<br><br>
+            μ = |min(m(t))| / A
+        </div>
+
+        <div class="control-group">
+            <label>
+                Índice de modulación (μ)
+                <span id="mu-display">0.5</span>
+            </label>
+            <input type="range" id="mu-slider" min="0.1" max="2.0" step="0.05" value="0.5">
+        </div>
+
+        <div class="buttons-grid">
+            <button id="btn-deseable" onclick="setMode(0.5, this)">μ < 1: Deseable (Ej. 0.5)</button>
+            <button id="btn-critica" onclick="setMode(1.0, this)">μ = 1: Crítica</button>
+            <button id="btn-sobremod" onclick="setMode(1.5, this)">μ > 1: Sobremodulación (Ej. 1.5)</button>
+            <button id="btn-dsb" onclick="setMode('dsb', this)">μ → ∞: Modulación DSB</button>
+        </div>
+
+        <div id="status-card">
+            <div id="status-title">Estado</div>
+            <div id="status-desc">Selecciona un valor para ver el comportamiento de la señal.</div>
+        </div>
+    </aside>
+
+    <main id="canvas-container">
+        <canvas id="waveCanvas"></canvas>
+    </main>
+
+    <script>
+        const canvas = document.getElementById('waveCanvas');
+        const ctx = canvas.getContext('2d');
+        const slider = document.getElementById('mu-slider');
+        const muDisplay = document.getElementById('mu-display');
+        const statusTitle = document.getElementById('status-title');
+        const statusDesc = document.getElementById('status-desc');
+        const buttons = document.querySelectorAll('.buttons-grid button');
+
+        let currentMu = 0.5;
+        let isDSB = false;
+
+        // Configuración de la señal
+        const fm = 2;   // Frecuencia del mensaje (Hz)
+        const fc = 40;  // Frecuencia de la portadora (Hz)
+        const Am = 1;   // Amplitud del mensaje m(t) = Am * cos(2πfmt)
+
+        function resizeCanvas() {
+            // Ajustamos el tamaño interno del canvas al tamaño real de su contenedor
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            drawWave();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        function updateStatus() {
+            if (isDSB) {
+                statusTitle.textContent = "Modulación DSB-SC (μ → ∞)";
+                statusDesc.textContent = "Doble Banda Lateral con Portadora Suprimida. La componente A es 0, por lo que la portadora desaparece en los cruces por cero del mensaje.";
+                statusTitle.style.color = "#8b5cf6"; // Morado
+            } else if (currentMu < 1) {
+                statusTitle.textContent = "Modulación Deseable (μ < 1)";
+                statusDesc.textContent = "La envolvente no cruza el eje cero. La señal mensaje m(t) se puede recuperar fácilmente usando un detector de envolvente.";
+                statusTitle.style.color = "#10b981"; // Verde
+            } else if (currentMu === 1) {
+                statusTitle.textContent = "Modulación Crítica (μ = 1)";
+                statusDesc.textContent = "La amplitud de la portadora desciende exactamente a cero. Es el límite antes de que ocurra la sobremodulación.";
+                statusTitle.style.color = "#f59e0b"; // Naranja
+            } else {
+                statusTitle.textContent = "Sobremodulación (μ > 1)";
+                statusDesc.textContent = "Inversión de fase de la portadora. La envolvente cruza el eje cero, lo que causa distorsión severa si se usa un detector de envolvente estándar.";
+                statusTitle.style.color = "var(--danger)"; // Rojo
+            }
+        }
+
+        function setMode(value, btnElement) {
+            buttons.forEach(btn => btn.classList.remove('active'));
+            if (btnElement) btnElement.classList.add('active');
+
+            if (value === 'dsb') {
+                isDSB = true;
+                slider.disabled = true;
+                muDisplay.textContent = "∞";
+            } else {
+                isDSB = false;
+                slider.disabled = false;
+                currentMu = parseFloat(value);
+                slider.value = currentMu;
+                muDisplay.textContent = currentMu.toFixed(2);
+            }
+            updateStatus();
+            drawWave();
+        }
+
+        slider.addEventListener('input', (e) => {
+            isDSB = false;
+            buttons.forEach(btn => btn.classList.remove('active'));
+            currentMu = parseFloat(e.target.value);
+            muDisplay.textContent = currentMu.toFixed(2);
+            updateStatus();
+            drawWave();
+        });
+
+        function drawWave() {
+            const width = canvas.width;
+            const height = canvas.height;
+            const centerY = height / 2;
+            
+            ctx.clearRect(0, 0, width, height);
+
+            // Determinar A basado en mu
+            // Si mu = |min(m(t))| / A  => A = 1 / mu (dado que Am = 1)
+            let A = isDSB ? 0 : 1 / currentMu;
+
+            // Escala vertical dinámica para que siempre ocupe bien la pantalla
+            // El valor máximo de la onda modulada es A + Am
+            const maxAmplitude = A + Am;
+            // Usamos el 80% de la mitad del canvas para la amplitud máxima
+            const scaleY = (height / 2 * 0.8) / Math.max(1, maxAmplitude);
+
+            // Dibujar eje X
+            ctx.beginPath();
+            ctx.moveTo(0, centerY);
+            ctx.lineTo(width, centerY);
+            ctx.strokeStyle = '#cbd5e1';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Parámetros de dibujo
+            const points = width; // Un punto por píxel horizontal
+            
+            // 1. Dibujar las envolventes (Líneas punteadas)
+            ctx.beginPath();
+            ctx.setLineDash([5, 5]);
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.7)'; // Rojo semitransparente
+            ctx.lineWidth = 2;
+
+            for (let i = 0; i < points; i++) {
+                // Mapear X (píxeles) a t (tiempo). Hacemos que entren 3 ciclos del mensaje en la pantalla
+                const t = (i / width) * (3 / fm); 
+                const mt = Am * Math.cos(2 * Math.PI * fm * t);
+                const env = A + mt;
+                const y = centerY - (env * scaleY);
+                if (i === 0) ctx.moveTo(i, y);
+                else ctx.lineTo(i, y);
+            }
+            ctx.stroke();
+
+            ctx.beginPath();
+            for (let i = 0; i < points; i++) {
+                const t = (i / width) * (3 / fm); 
+                const mt = Am * Math.cos(2 * Math.PI * fm * t);
+                const env = -(A + mt); // Envolvente negativa
+                const y = centerY - (env * scaleY);
+                if (i === 0) ctx.moveTo(i, y);
+                else ctx.lineTo(i, y);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]); // Restaurar línea sólida
+
+            // 2. Dibujar la señal modulada AM (Portadora rápida)
+            ctx.beginPath();
+            ctx.strokeStyle = 'var(--primary)';
+            ctx.lineWidth = 1.5;
+
+            for (let i = 0; i < points; i++) {
+                const t = (i / width) * (3 / fm); 
+                const mt = Am * Math.cos(2 * Math.PI * fm * t);
+                const carrier = Math.cos(2 * Math.PI * fc * t);
+                
+                const st = (A + mt) * carrier;
+                const y = centerY - (st * scaleY);
+
+                if (i === 0) ctx.moveTo(i, y);
+                else ctx.lineTo(i, y);
+            }
+            ctx.stroke();
+        }
+
+        // Inicialización
+        resizeCanvas();
+        document.getElementById('btn-deseable').click(); // Iniciar con caso deseable
+    </script>
+</body>
+</html>
